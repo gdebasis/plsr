@@ -114,5 +114,5 @@ Run the following script to build the index.
 Run the following script to execute retrieval.
 ```
 ./retrieve.sh <index dir> <qrels train> <qrels file> <query file>
-`
+```
 
