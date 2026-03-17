@@ -65,22 +65,7 @@ public class Retriever {
         return qList;
     }
 
-    public Query makeQuery(MsMarcoQuery query) throws Exception {
-        String queryText = query.qText;
-        return makeQuery(queryText);
-    }
-
-    public Query makeQuery(String queryText) throws Exception {
-        BooleanQuery.Builder qb = new BooleanQuery.Builder();
-        String[] tokens = MsMarcoIndexer.analyze(MsMarcoIndexer.constructAnalyzer(), queryText).split("\\s+");
-        for (String token: tokens) {
-            TermQuery tq = new TermQuery(new Term(Constants.CONTENT_FIELD, token));
-            qb.add(new BooleanClause(tq, BooleanClause.Occur.SHOULD));
-        }
-        return (Query)qb.build();
-    }
-
-    public Map<String, TopDocs> retrieve(Similarity sim) throws Exception {
+    public Map<String, TopDocs> retrieve(Similarity sim, Map<String, Double> beta) throws Exception {
         searcher.setSimilarity(sim);
 
         Map<String, TopDocs> results = new HashMap<>();
@@ -105,13 +90,13 @@ public class Retriever {
             String qid = e.getKey();
             String queryText = e.getValue();
 
-            MsMarcoQuery msMarcoQuery = new MsMarcoQuery(qid, queryText);
-            Query luceneQuery = msMarcoQuery.getQuery();
+            // Build weighted query
+            Query weightedQuery = new MsMarcoQuery(qid, queryText).makeQuery(beta);
+            System.out.println(weightedQuery);
 
-            //System.out.println(String.format("Retrieving for query %s: %s", qid, luceneQuery));
-            topDocs = searcher.search(luceneQuery, Constants.NUM_WANTED);
+            topDocs = searcher.search(weightedQuery, Constants.NUM_WANTED);
+
             results.put(qid, topDocs);
-
             saveTopDocsResFile(bw, qid, queryText, topDocs);
         }
         bw.close();
@@ -140,21 +125,15 @@ public class Retriever {
         Retriever retriever = new Retriever(args[0], args[3]);
         IndexUtils.init(retriever.searcher);
         RelEstimator relEstimator = new RelEstimator(retriever.reader, args[1], Constants.RELPRIOR_WEIGHTS_FILE);
-
-        String[] similarityNames = { "LM-Dir", "LM-Dir-relp", "LM-Dir-allp"};
-        Similarity[] sims = {
-            //new BM25Similarity(),
-            new LMDirichletSimilarity(1000),
-            new TermPriorSimilarity(new LMDirichletSimilarity(1000), relEstimator.computeBetas())
-        };
+        Map<String, Double> termPriors = relEstimator.computeBetas();
 
         AllRelRcds relRcds = new AllRelRcds(args[2]);
 
-        for (int i=0; i < sims.length; i++) {
-            Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(sims[i]));
-            System.out.println(similarityNames[i]);
-            System.out.println(evaluator.computeAll());
-        }
+        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(1000), termPriors));
+        System.out.println(evaluator.computeAll());
+
+        //evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(1000), null));
+        //System.out.println(evaluator.computeAll());
 
         retriever.reader.close();
     }

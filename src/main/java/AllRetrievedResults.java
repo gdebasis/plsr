@@ -236,11 +236,11 @@ public class AllRetrievedResults {
             RetrievedResults res = e.getValue();
             map += res.computeAP();
             //pAt5 += res.precAtTop(5);
-            //avgRecall += res.computeRecall();
+            avgRecall += res.computeRecall();
             avgNDCG += res.computeNdcg(10);
         }
 
-        //buff.append("recall:\t").append(avgRecall/(float)allRelInfo.getTotalNumRel()).append("\n");
+        buff.append("recall:\t").append(avgRecall/(float)allRelInfo.getTotalNumRel()).append("\n");
         buff.append("map:\t").append(map/numQueries).append("\n");
         //buff.append("P@5:\t").append(pAt5/numQueries).append("\n");
         buff.append("nDCG@10:\t").append(avgNDCG/numQueries).append("\n");

@@ -67,7 +67,7 @@ public class MsMarcoQuery implements Comparable<MsMarcoQuery> {
                 .collect(Collectors.toSet());
     }
 
-    void makeQuery() {
+    Query makeQuery() {
         BooleanQuery.Builder qb = new BooleanQuery.Builder();
         String[] tokens = MsMarcoIndexer
                 .analyze(MsMarcoIndexer.constructAnalyzer(), this.qText).split("\\s+");
@@ -76,6 +76,41 @@ public class MsMarcoQuery implements Comparable<MsMarcoQuery> {
             qb.add(new BooleanClause(tq, BooleanClause.Occur.SHOULD));
         }
         query = qb.build();
+        return query;
+    }
+
+    public Query makeQuery(Map<String, Double> beta) {
+        if (beta==null)
+            return makeQuery();
+
+        BooleanQuery.Builder qb = new BooleanQuery.Builder();
+
+        // Use your analyzer pipeline
+        String analyzed = MsMarcoIndexer.analyze(
+                MsMarcoIndexer.constructAnalyzer(),
+                this.qText
+        );
+
+        String[] tokens = analyzed.split("\\s+");
+
+        for (String token : tokens) {
+            if (token.isEmpty()) continue;
+
+            double b = beta.getOrDefault(token, 0.0);
+
+            // Option 1: skip non-informative terms (recommended)
+            if (b <= 0) continue;
+
+            TermQuery tq = new TermQuery(
+                    new Term(Constants.CONTENT_FIELD, token)
+            );
+
+            BoostQuery boosted = new BoostQuery(tq, (float) b);
+            qb.add(new BooleanClause(boosted, BooleanClause.Occur.SHOULD));
+        }
+
+        query = qb.build();
+        return query;
     }
 
     public List<MsMarcoQuery> retrieveSimilarQueries(
