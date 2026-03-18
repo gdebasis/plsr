@@ -57,7 +57,8 @@ public class MsMarcoIndexer {
     }
 
     static public String normalizeNumbers(String content) {
-        return content.replaceAll("(-)?\\d+(\\.\\d*)?", " _NUM_ ");
+        //return content.replaceAll("(-)?\\d+(\\.\\d*)?", " _NUM_ ");
+        return content.replaceAll("(-)?\\d+(\\.\\d*)?", " ");
     }
 
     // MSMARCO format... docid, text
@@ -143,23 +144,13 @@ public class MsMarcoIndexer {
     }
 
     public static void main(String[] args) {
-        if (args.length < 4) {
-            System.err.println("Required arguments: <document collection file> <query file> <document index folder> <query index folder>");
-            args = new String[4];
-            args[0] = Constants.MSMARCO_COLL;
-            args[1] = Constants.MSMARCO_INDEX;
-            args[2] = Constants.QUERY_FILE_TRAIN;
-            args[3] = Constants.MSMARCO_QUERY_INDEX;
-        }
+        String collPath = args.length<2? Constants.MSMARCO_COLL: args[0];
+        String indexDir = args.length<2? Constants.MSMARCO_INDEX: args[1];
 
         try {
-            System.out.println("Indexing documents from the file " + args[0] + " into " + args[1]);
+            System.out.println("Indexing documents from the file " + collPath + " into " + indexDir);
             MsMarcoIndexer indexer = new MsMarcoIndexer();
-            indexer.indexCollection(args[0], args[1]);
-
-            System.out.println("Indexing queries...");
-            //Also index the queries
-            indexer.indexCollection(args[2], args[3]);
+            indexer.indexCollection(collPath, indexDir);
         }
         catch (Exception ex) {
             ex.printStackTrace();

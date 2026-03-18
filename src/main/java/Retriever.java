@@ -37,6 +37,7 @@ public class Retriever {
             queryList.add(new MsMarcoQuery(e.getKey(), e.getValue()));
         }
         this.resFile = resFile;
+        IndexUtils.init(searcher);
     }
 
     public Retriever(String queryFile, String resFile, String analyzerName) throws Exception {
@@ -51,35 +52,25 @@ public class Retriever {
         this(Constants.MSMARCO_INDEX, queryFile, new File(queryFile).getName() + ".res", "english");
     }
 
-    public List<MsMarcoQuery> loadQueriesAsList(String queryFile) throws Exception {
-        BufferedReader br = new BufferedReader(new FileReader(queryFile));
-        String line;
-        List<MsMarcoQuery> qList = new ArrayList<>();
-
-        while ((line=br.readLine())!=null) {
-            String[] tokens = line.split("\t");
-            qList.add(new MsMarcoQuery(tokens[0], tokens[1]));
-        }
-        br.close();
-
-        return qList;
+    public Query makeQuery(String qid, String queryText) {
+        return new MsMarcoQuery(qid, queryText).makeQuery();
     }
 
-    public Map<String, TopDocs> retrieve(Similarity sim, Map<String, Double> beta) throws Exception {
+    public Map<String, TopDocs> retrieve(Similarity sim) throws Exception {
         searcher.setSimilarity(sim);
 
         Map<String, TopDocs> results = new HashMap<>();
         Map<String, String> testQueries = IndexUtils.loadQueries(queryFile);
         testQueries
-            .entrySet()
-            .stream()
-            .collect(
-                    Collectors.toMap(
-                            e -> e.getKey(),
-                            e -> MsMarcoIndexer.normalizeNumbers(e.getValue()
-                            )
-                    )
-            )
+                .entrySet()
+                .stream()
+                .collect(
+                        Collectors.toMap(
+                                e -> e.getKey(),
+                                e -> MsMarcoIndexer.normalizeNumbers(e.getValue()
+                                )
+                        )
+                )
         ;
 
         System.out.println("Saving results in " + resFile);
@@ -91,9 +82,7 @@ public class Retriever {
             String queryText = e.getValue();
 
             // Build weighted query
-            Query weightedQuery = new MsMarcoQuery(qid, queryText).makeQuery(beta);
-            System.out.println(weightedQuery);
-
+            Query weightedQuery = makeQuery(qid, queryText);
             topDocs = searcher.search(weightedQuery, Constants.NUM_WANTED);
 
             results.put(qid, topDocs);
@@ -114,26 +103,15 @@ public class Retriever {
     public List<MsMarcoQuery> getQueryList() { return queryList; }
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 4) {
-            args = new String[4];
-            args[0] = Constants.MSMARCO_INDEX;
-            args[1] = Constants.QRELS_TRAIN;
-            args[2] = Constants.QRELS_DL19;
-            args[3] = Constants.QUERIES_DL19;
-        }
+        final String indexDir = args.length < 3? Constants.MSMARCO_INDEX : args[0];
+        final String qrelsTest = args.length < 3? Constants.QRELS_DL19 : args[1];
+        final String queriesTest = args.length < 3? Constants.QUERIES_DL19 : args[2];
 
-        Retriever retriever = new Retriever(args[0], args[3]);
-        IndexUtils.init(retriever.searcher);
-        RelEstimator relEstimator = new RelEstimator(retriever.reader, args[1], Constants.RELPRIOR_WEIGHTS_FILE);
-        Map<String, Double> termPriors = relEstimator.computeBetas();
+        Retriever retriever = new Retriever(indexDir, queriesTest);
+        AllRelRcds relRcds = new AllRelRcds(qrelsTest);
 
-        AllRelRcds relRcds = new AllRelRcds(args[2]);
-
-        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(1000), termPriors));
+        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(1000)));
         System.out.println(evaluator.computeAll());
-
-        //evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(1000), null));
-        //System.out.println(evaluator.computeAll());
 
         retriever.reader.close();
     }

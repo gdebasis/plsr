@@ -1,12 +1,12 @@
 public interface Constants {
-    boolean NORMALISE_NUMBERS = false;
+    boolean NORMALISE_NUMBERS = true;
     String ID_FIELD = "id";
     String CONTENT_FIELD = "words";
 
-    String MSMARCO_COLL = "data/collection.tsv";
+    String MSMARCO_COLL = "data/coll.tsv";
     String MSMARCO_INDEX = "index/";
-    String MSMARCO_QUERY_INDEX = "query_index/";
     String QRELS_TRAIN = "data/qrels.train.tsv";
+    String QRELS_TRAIN_SMALL = "data/qrels.train.tsv.small";
     String QUERY_FILE_TRAIN = "data/queries.train.tsv";
     String STOP_FILE = "stop.txt";
     String QRELS_TEST = "data/trecdl/trecdl1920.qrels";

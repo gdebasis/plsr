@@ -176,7 +176,7 @@ public class IndexUtils {
     static Query makeQuery(String qText) {
         BooleanQuery.Builder qb = new BooleanQuery.Builder();
         String[] tokens = MsMarcoIndexer
-                .analyze(MsMarcoIndexer.constructAnalyzer(), qText).split("\\s+");
+                .analyze(MsMarcoIndexer.constructAnalyzer(), MsMarcoIndexer.normalizeNumbers(qText)).split("\\s+");
         for (String token: tokens) {
             TermQuery tq = new TermQuery(new Term(Constants.CONTENT_FIELD, token));
             qb.add(new BooleanClause(tq, BooleanClause.Occur.SHOULD));
