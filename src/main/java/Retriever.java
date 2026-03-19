@@ -110,7 +110,7 @@ public class Retriever {
         Retriever retriever = new Retriever(indexDir, queriesTest);
         AllRelRcds relRcds = new AllRelRcds(qrelsTest);
 
-        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(500)));
+        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(10)));
         System.out.println(evaluator.computeAll());
 
         retriever.reader.close();

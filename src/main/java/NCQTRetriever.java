@@ -3,12 +3,14 @@ import org.apache.lucene.search.similarities.LMDirichletSimilarity;
 
 import java.io.File;
 
-public class QTNCRetriever extends Retriever {
+public class NCQTRetriever extends Retriever {
     QueryTermTranslator translator;
     QueryTermTranslator neg_translator;
     int numExpansionTerms;
 
-    public QTNCRetriever(String indexDir, String testqueryFile, String trainQrelsFilePos, String trainQrelsFileNeg, String trainQueryFile, int numExpansionTerms) throws Exception {
+    public NCQTRetriever(String indexDir, String testqueryFile,
+                         String trainQrelsFilePos, String trainQrelsFileNeg,
+                         String trainQueryFile, int numExpansionTerms) throws Exception {
         super(indexDir, testqueryFile, new File(testqueryFile).getName() + ".res", "english");
 
         this.numExpansionTerms = numExpansionTerms;
@@ -39,12 +41,12 @@ public class QTNCRetriever extends Retriever {
         final String qrelsTest = args.length < 6? Constants.QRELS_DL19 : args[4];
         final String queriesTest = args.length < 6? Constants.QUERIES_DL19 : args[5];
 
-        Retriever retriever = new QTNCRetriever(indexDir,
+        Retriever retriever = new NCQTRetriever(indexDir,
                 queriesTest, qrelsTrainPos, qrelsTrainNeg,
-                queriesTrain, 20);
+                queriesTrain, 25);
 
         AllRelRcds relRcds = new AllRelRcds(qrelsTest);
-        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(100)));
+        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(50)));
         System.out.println(evaluator.computeAll());
 
         retriever.reader.close();

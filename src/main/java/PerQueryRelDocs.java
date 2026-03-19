@@ -12,23 +12,10 @@ public class PerQueryRelDocs {
         relMap = new HashMap();
     }
 
-    public void addTuple(String docId) {
-        relMap.put(docId, 1);
-    }
-
     void addTuple(String docId, int rel) {
         if (relMap.get(docId) != null)
             return;
-        if (rel > 0) {
-            relMap.put(docId, rel);
-        }
-    }
-
-    public boolean isRel(String docName) {
-        Integer relLabel = relMap.get(docName);
-        if (relLabel==null)
-            return false;
-        return relLabel.intValue() >= Constants.EVAL_MIN_REL;
+        relMap.put(docId, rel);
     }
 
     public boolean isRel(String docName, int relThreshold) {

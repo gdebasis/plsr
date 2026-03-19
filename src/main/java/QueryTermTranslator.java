@@ -27,7 +27,6 @@ public class QueryTermTranslator {
     private final int maxTranslations = 50; // prune per term
 
     Map<String, List<String>> queryTermsCache;
-    Map<String, List<String>> docTermsCache;
     Map<String, String> queries;
 
     public QueryTermTranslator(IndexReader reader, String field, String trainQrelsFile,
@@ -70,30 +69,12 @@ public class QueryTermTranslator {
             }
         }
 
-        System.out.println("Analysing documents...");
-        docTermsCache = new HashMap<>();
-
-        int docCount = 0;
-        for (PerQueryRelDocs perQuery : qrels.perQueryRels.values()) {
-            for (String docId : perQuery.getRelDocs()) {
-                if (docTermsCache.containsKey(docId)) continue;
-
-                List<String> dTerms = docProvider.getDocTerms(docId, maxDocTerms);
-                if (!dTerms.isEmpty()) {
-                    docTermsCache.put(docId, dTerms);
-                }
-
-                if (docCount++%1000 == 0)
-                    System.out.print(String.format("Iterated over %d documents\r", docCount));
-            }
-        }
-
         for (PerQueryRelDocs perQuery : qrels.perQueryRels.values()) {
             List<String> qTerms = queryTermsCache.get(perQuery.qid);
             if (qTerms == null) continue;
 
             for (String docId : perQuery.getRelDocs()) {
-                List<String> dTerms = docTermsCache.get(docId);
+                List<String> dTerms = docProvider.getDocTerms(docId, maxDocTerms);
                 if (dTerms == null) continue;
 
                 for (String q : qTerms) {
@@ -150,7 +131,7 @@ public class QueryTermTranslator {
                 if (qTerms == null) continue;
 
                 for (String docId : perQuery.getRelDocs()) {
-                    List<String> dTerms = docTermsCache.get(docId);
+                    List<String> dTerms = docProvider.getDocTerms(docId, maxDocTerms);
                     if (dTerms == null) continue;
 
                     for (String w : dTerms) {
@@ -222,28 +203,8 @@ public class QueryTermTranslator {
                         (m, e) -> m.put(e.getKey(), e.getValue()),
                         HashMap::putAll);
 
-        // Renormalize
-        double sum = topK.values().stream().mapToDouble(Double::doubleValue).sum();
-
-        if (sum > 0) {
-            for (Map.Entry<String, Double> e : topK.entrySet()) {
-                e.setValue(e.getValue() / sum);
-            }
-        }
-
         return topK;
     }
-
-    /*
-    private Map<String, Double> prune(Map<String, Double> map, int k) {
-        return map.entrySet().stream()
-            .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
-            .limit(k)
-            .collect(HashMap::new,
-                    (m, e) -> m.put(e.getKey(), e.getValue()),
-                    HashMap::putAll);
-    }
-    */
 
     // -------------------------------
     // 2. SAVE / LOAD
@@ -305,18 +266,24 @@ public class QueryTermTranslator {
             if (expansions == null) continue;
 
             int count = 0;
-            for (Map.Entry<String, Double> e :
-                    expansions.entrySet().stream()
-                    .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
-                    .collect(Collectors.toList())) {
 
-                if (count++ >= m) break;
+            List<Map.Entry<String, Double>> topM =
+                expansions.entrySet().stream()
+                        .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                        .limit(m)
+                        .collect(Collectors.toList()
+            );
+            float sum = (float)topM.stream()
+                    .mapToDouble(Map.Entry::getValue)
+                    .sum();
+
+            for (Map.Entry<String, Double> e: topM) {
                 if (e.getKey().equals(term)) continue;
 
                 TermQuery newTq = new TermQuery(
                         new Term(Constants.CONTENT_FIELD, e.getKey()));
 
-                qb.add(new BoostQuery(newTq, e.getValue().floatValue()), BooleanClause.Occur.SHOULD);
+                qb.add(new BoostQuery(newTq, e.getValue().floatValue()/sum), BooleanClause.Occur.SHOULD);
             }
         }
 
@@ -385,15 +352,34 @@ public class QueryTermTranslator {
                 weighted.add(new AbstractMap.SimpleEntry<>(w, weight));
             }
 
-            // sort descending
             weighted.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
+
+            // Take top-m first
+            List<Map.Entry<String, Double>> topM = new ArrayList<>();
             int count = 0;
 
             for (Map.Entry<String, Double> e : weighted) {
                 if (count++ >= m) break;
+                topM.add(e);
+            }
 
-                TermQuery newTq = new TermQuery(new Term(Constants.CONTENT_FIELD, e.getKey()));
-                qb.add(new BoostQuery(newTq, e.getValue().floatValue()), BooleanClause.Occur.SHOULD);
+            // Compute normalization constant
+            double sum = topM.stream()
+                    .mapToDouble(Map.Entry::getValue)
+                    .sum();
+
+            // Avoid division by zero
+            if (sum <= 0) sum = 1.0;
+
+            // Add normalized weights
+            for (Map.Entry<String, Double> e : topM) {
+                double normWeight = e.getValue() / sum;
+
+                TermQuery newTq = new TermQuery(
+                        new Term(Constants.CONTENT_FIELD, e.getKey()));
+
+                qb.add(new BoostQuery(newTq, (float) normWeight),
+                        BooleanClause.Occur.SHOULD);
             }
         }
 

@@ -7,7 +7,7 @@ public interface Constants {
     String MSMARCO_INDEX = "index/";
     String QRELS_TRAIN = "data/qrels.train.tsv";
     String QRELS_TRAIN_POS = "data/train_qrels_rel.txt";
-    String QRELS_TRAIN_NEG = "data/train_qrels_nonrel.txt";
+    String QRELS_TRAIN_NEG = "data/train_qrels_nonrel.small.txt";
     String QUERY_FILE_TRAIN = "data/queries.train.tsv";
     String STOP_FILE = "stop.txt";
     String QRELS_TEST = "data/trecdl/trecdl1920.qrels";
