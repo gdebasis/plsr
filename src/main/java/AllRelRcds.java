@@ -7,11 +7,21 @@ public class AllRelRcds {
     String qrelsFile;
     Map<String, PerQueryRelDocs> perQueryRels;
     int totalNumRel;
+    int targetLabel;
+
+    public AllRelRcds(String qrelsFile, int targetLabel) {
+        this.qrelsFile = qrelsFile;
+        perQueryRels = new HashMap<>();
+        totalNumRel = 0;
+        this.targetLabel = targetLabel;
+        load();
+    }
 
     public AllRelRcds(String qrelsFile) {
         this.qrelsFile = qrelsFile;
         perQueryRels = new HashMap<>();
         totalNumRel = 0;
+        this.targetLabel = 1;
         load();
     }
 
@@ -50,8 +60,14 @@ public class AllRelRcds {
             perQueryRels.put(qid, relTuple);
         }
         int rel = Integer.parseInt(tokens[3]);
-        if (rel > 0)
-            relTuple.addTuple(tokens[2], Integer.parseInt(tokens[3]));
+        if (targetLabel > 0) {
+            if (rel > 0)
+                relTuple.addTuple(tokens[2], Integer.parseInt(tokens[3]));
+        }
+        else { // helps loading only non-rel documents w/o changing the data structure
+            if (rel == targetLabel)
+                relTuple.addTuple(tokens[2], Integer.parseInt(tokens[3]));
+        }
     }
 
     public String toString() {

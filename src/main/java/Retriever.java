@@ -62,15 +62,15 @@ public class Retriever {
         Map<String, TopDocs> results = new HashMap<>();
         Map<String, String> testQueries = IndexUtils.loadQueries(queryFile);
         testQueries
-                .entrySet()
-                .stream()
-                .collect(
-                        Collectors.toMap(
-                                e -> e.getKey(),
-                                e -> MsMarcoIndexer.normalizeNumbers(e.getValue()
-                                )
-                        )
+            .entrySet()
+            .stream()
+            .collect(
+                Collectors.toMap(
+                e -> e.getKey(),
+                e -> MsMarcoIndexer.normalizeNumbers(e.getValue()
                 )
+                )
+            )
         ;
 
         System.out.println("Saving results in " + resFile);
@@ -110,7 +110,7 @@ public class Retriever {
         Retriever retriever = new Retriever(indexDir, queriesTest);
         AllRelRcds relRcds = new AllRelRcds(qrelsTest);
 
-        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(1000)));
+        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(500)));
         System.out.println(evaluator.computeAll());
 
         retriever.reader.close();

@@ -16,13 +16,14 @@ public class QueryTermTranslator {
     String trainQrelsFile;
     String trainQueryFile;
     AllRelRcds qrels;
+    int targetLabel;
 
     // t(w | q)
     private Map<String, Map<String, Double>> t;
     LuceneDocTermProvider docProvider;
 
-    private final int maxDocTerms = 50;   // prune doc terms
-    private final int maxQueryTerms = 20; // safety
+    private final int maxDocTerms = 100;   // prune doc terms
+    private final int maxQueryTerms = 10; // safety
     private final int maxTranslations = 50; // prune per term
 
     Map<String, List<String>> queryTermsCache;
@@ -30,10 +31,12 @@ public class QueryTermTranslator {
     Map<String, String> queries;
 
     public QueryTermTranslator(IndexReader reader, String field, String trainQrelsFile,
-                               String trainQueryFile, String modelFileName) {
+                               String trainQueryFile, int targetLabel) {
         this.reader = reader;
         this.field = field;
-        this.modelFileName = modelFileName;
+        this.targetLabel = targetLabel;
+
+        this.modelFileName = String.format("%s.cocc.%d.tsv", trainQrelsFile, targetLabel);
         this.trainQrelsFile = trainQrelsFile;
         this.trainQueryFile = trainQueryFile;
 
@@ -49,7 +52,7 @@ public class QueryTermTranslator {
         Map<String, Set<String>> cooc = new HashMap<>();
 
         System.out.println("Loading training qrels...");
-        qrels = new AllRelRcds(trainQrelsFile);
+        qrels = new AllRelRcds(trainQrelsFile, targetLabel);
 
         System.out.println("Loading training queries...");
         queries = IndexUtils.loadQueries(trainQueryFile);
@@ -86,9 +89,6 @@ public class QueryTermTranslator {
         }
 
         for (PerQueryRelDocs perQuery : qrels.perQueryRels.values()) {
-            String qText = queries.get(perQuery.qid);
-            if (qText == null) continue;
-
             List<String> qTerms = queryTermsCache.get(perQuery.qid);
             if (qTerms == null) continue;
 
@@ -146,14 +146,10 @@ public class QueryTermTranslator {
                     System.out.print(String.format("Iterated over %d queries\r", queryCount));
 
                 String qid = perQuery.qid;
-                String qText = queries.get(qid);
-                if (qText == null) continue;
-
                 List<String> qTerms = queryTermsCache.get(qid);
                 if (qTerms == null) continue;
 
                 for (String docId : perQuery.getRelDocs()) {
-
                     List<String> dTerms = docTermsCache.get(docId);
                     if (dTerms == null) continue;
 
@@ -218,13 +214,36 @@ public class QueryTermTranslator {
     // -------------------------------
 
     private Map<String, Double> prune(Map<String, Double> map, int k) {
-        return map.entrySet().stream()
+
+        Map<String, Double> topK = map.entrySet().stream()
                 .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
                 .limit(k)
                 .collect(HashMap::new,
                         (m, e) -> m.put(e.getKey(), e.getValue()),
                         HashMap::putAll);
+
+        // Renormalize
+        double sum = topK.values().stream().mapToDouble(Double::doubleValue).sum();
+
+        if (sum > 0) {
+            for (Map.Entry<String, Double> e : topK.entrySet()) {
+                e.setValue(e.getValue() / sum);
+            }
+        }
+
+        return topK;
     }
+
+    /*
+    private Map<String, Double> prune(Map<String, Double> map, int k) {
+        return map.entrySet().stream()
+            .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+            .limit(k)
+            .collect(HashMap::new,
+                    (m, e) -> m.put(e.getKey(), e.getValue()),
+                    HashMap::putAll);
+    }
+    */
 
     // -------------------------------
     // 2. SAVE / LOAD
@@ -266,38 +285,36 @@ public class QueryTermTranslator {
     // 3. QUERY EXPANSION
     // -------------------------------
 
-    public Query expandQuery(Query originalQuery, int m) {
-
+    static public Query expandQuery(Query originalQuery, QueryTermTranslator translator, int m) {
         BooleanQuery.Builder qb = new BooleanQuery.Builder();
-
         if (!(originalQuery instanceof BooleanQuery)) {
             return originalQuery;
         }
 
         BooleanQuery bq = (BooleanQuery) originalQuery;
-
         for (BooleanClause clause : bq.clauses()) {
             Query q = clause.getQuery();
-
             if (!(q instanceof TermQuery)) continue;
 
             TermQuery tq = (TermQuery) q;
+            qb.add(new BoostQuery(tq, 1.0f), BooleanClause.Occur.SHOULD); // the original query term with weight 1
+
             String term = tq.getTerm().text();
 
-            Map<String, Double> expansions = t.get(term);
+            Map<String, Double> expansions = translator.t.get(term);
             if (expansions == null) continue;
 
             int count = 0;
-
             for (Map.Entry<String, Double> e :
                     expansions.entrySet().stream()
-                            .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
-                            .collect(Collectors.toList())) {
+                    .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                    .collect(Collectors.toList())) {
 
                 if (count++ >= m) break;
+                if (e.getKey().equals(term)) continue;
 
                 TermQuery newTq = new TermQuery(
-                        new Term(field, e.getKey()));
+                        new Term(Constants.CONTENT_FIELD, e.getKey()));
 
                 qb.add(new BoostQuery(newTq, e.getValue().floatValue()), BooleanClause.Occur.SHOULD);
             }
@@ -306,12 +323,81 @@ public class QueryTermTranslator {
         return qb.build();
     }
 
+    public Map<String, Double> getTranslations(String term) {
+        return t.get(term);
+    }
+
     // -------------------------------
     // Interface for doc term access
     // -------------------------------
 
     public interface LuceneDocTermProvider {
         List<String> getDocTerms(String docId, int maxTerms);
+    }
+
+    public static Query expandQueryNC(
+            Query originalQuery,
+            QueryTermTranslator relModel,
+            QueryTermTranslator nonRelModel,
+            int m) {
+
+        BooleanQuery.Builder qb = new BooleanQuery.Builder();
+        if (!(originalQuery instanceof BooleanQuery)) {
+            return originalQuery;
+        }
+
+        BooleanQuery bq = (BooleanQuery) originalQuery;
+        final double EPS = 1e-9;
+
+        for (BooleanClause clause : bq.clauses()) {
+            Query q = clause.getQuery();
+            if (!(q instanceof TermQuery)) continue;
+
+            TermQuery tq = (TermQuery) q;
+            String term = tq.getTerm().text();
+
+            // Keep original term (anchor)
+            qb.add(new BoostQuery(tq, 1.0f), BooleanClause.Occur.SHOULD);
+
+            Map<String, Double> tr = relModel.getTranslations(term);
+            Map<String, Double> tn = nonRelModel.getTranslations(term);
+
+            if (tr == null) continue;
+
+            // Collect candidate weights
+            List<Map.Entry<String, Double>> weighted = new ArrayList<>();
+
+            for (Map.Entry<String, Double> e : tr.entrySet()) {
+                String w = e.getKey();
+                double pr = e.getValue();
+
+                if (w.equals(term)) continue;
+
+                double pn = (tn == null) ? EPS : tn.getOrDefault(w, EPS);
+
+                // KL contribution
+                //double weight = pr * Math.log((pr + EPS) / (pn + EPS));
+                double weight = Math.log(1+ (pr + EPS) / (pn + EPS));
+
+                // Optional: skip negative contributions
+                if (weight <= 0) continue;
+
+                weighted.add(new AbstractMap.SimpleEntry<>(w, weight));
+            }
+
+            // sort descending
+            weighted.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
+            int count = 0;
+
+            for (Map.Entry<String, Double> e : weighted) {
+                if (count++ >= m) break;
+
+                TermQuery newTq = new TermQuery(new Term(Constants.CONTENT_FIELD, e.getKey()));
+                qb.add(new BoostQuery(newTq, e.getValue().floatValue()), BooleanClause.Occur.SHOULD);
+            }
+        }
+
+        return qb.build();
     }
 }
 
