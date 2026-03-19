@@ -16,11 +16,13 @@ public class NCQTRetriever extends Retriever {
         this.numExpansionTerms = numExpansionTerms;
 
         System.out.println("Training from rel docs...");
-        translator = new QueryTermTranslator(reader, Constants.CONTENT_FIELD, trainQrelsFilePos, trainQueryFile, 1);
+        translator = new QueryTermTranslator(reader, Constants.CONTENT_FIELD, trainQrelsFilePos, trainQueryFile,
+                1, 20, 50);
         translator.train(3);
 
         System.out.println("Training from nonrel docs...");
-        neg_translator = new QueryTermTranslator(reader, Constants.CONTENT_FIELD, trainQrelsFileNeg, trainQueryFile, 0);
+        neg_translator = new QueryTermTranslator(reader, Constants.CONTENT_FIELD, trainQrelsFileNeg, trainQueryFile, 0,
+                20, 50);
         neg_translator.train(3);
     }
 

@@ -22,18 +22,23 @@ public class QueryTermTranslator {
     private Map<String, Map<String, Double>> t;
     LuceneDocTermProvider docProvider;
 
-    private final int maxDocTerms = 100;   // prune doc terms
-    private final int maxQueryTerms = 10; // safety
-    private final int maxTranslations = 50; // prune per term
+    int maxDocTerms;   // prune doc terms
+    int maxTranslations; // prune per term
 
     Map<String, List<String>> queryTermsCache;
     Map<String, String> queries;
 
+    static final boolean IDF_WEIGHTING = false;
+
     public QueryTermTranslator(IndexReader reader, String field, String trainQrelsFile,
-                               String trainQueryFile, int targetLabel) {
+                               String trainQueryFile, int targetLabel,
+                               int maxDocTerms, int maxTranslations) {
         this.reader = reader;
         this.field = field;
         this.targetLabel = targetLabel;
+
+        this.maxDocTerms = maxDocTerms;
+        this.maxTranslations = maxTranslations;
 
         this.modelFileName = String.format("%s.cocc.%d.tsv", trainQrelsFile, targetLabel);
         this.trainQrelsFile = trainQrelsFile;
@@ -63,7 +68,7 @@ public class QueryTermTranslator {
             if (queryCount++%1000 == 0)
                 System.out.print(String.format("Iterated over %d queries\r", queryCount));
 
-            List<String> toks = tokenize(e.getValue());
+            List<String> toks = tokenizeQueryText(e.getValue());
             if (!toks.isEmpty()) {
                 queryTermsCache.put(e.getKey(), toks);
             }
@@ -176,24 +181,33 @@ public class QueryTermTranslator {
         save(modelFileName);
     }
 
+    static private double idf(IndexReader reader, String termText) throws IOException {
+        Term term = new Term(Constants.CONTENT_FIELD, termText);
+        int df = reader.docFreq(term);
+        int N = reader.numDocs();
+        return Math.log((N + 1.0) / (df + 1.0));
+    }
+
     // -------------------------------
     // Tokenization (reuse your analyzer ideally)
     // -------------------------------
-    private List<String> tokenize(String text) {
-        String analyzed = MsMarcoIndexer.analyze(MsMarcoIndexer.constructAnalyzer(), MsMarcoIndexer.normalizeNumbers(text));
-        String[] toks = analyzed.split("\\s+");
+    private List<String> tokenizeQueryText(String text) {
+        String analyzed = MsMarcoIndexer.analyze(
+                MsMarcoIndexer.constructAnalyzer(),
+                MsMarcoIndexer.normalizeNumbers(text)
+        );
 
-        List<String> list = new ArrayList<>();
+        String[] toks = analyzed.split("\\s+");
+        List<String> terms = new ArrayList<>();
         for (String t : toks) {
-            if (!t.isEmpty()) list.add(t);
+            if (!t.isEmpty()) terms.add(t);
         }
-        return list.subList(0, Math.min(list.size(), maxQueryTerms));
+        return terms;
     }
 
     // -------------------------------
     // Prune top-K
     // -------------------------------
-
     private Map<String, Double> prune(Map<String, Double> map, int k) {
 
         Map<String, Double> topK = map.entrySet().stream()
@@ -253,38 +267,82 @@ public class QueryTermTranslator {
         }
 
         BooleanQuery bq = (BooleanQuery) originalQuery;
+
+        // Accumulate expansion weights globally
+        Map<String, Float> expansionWeights = new HashMap<>();
+
         for (BooleanClause clause : bq.clauses()) {
             Query q = clause.getQuery();
             if (!(q instanceof TermQuery)) continue;
 
             TermQuery tq = (TermQuery) q;
-            qb.add(new BoostQuery(tq, 1.0f), BooleanClause.Occur.SHOULD); // the original query term with weight 1
+
+            // Keep original term with weight 1
+            qb.add(new BoostQuery(tq, 1.0f), BooleanClause.Occur.SHOULD);
 
             String term = tq.getTerm().text();
-
             Map<String, Double> expansions = translator.t.get(term);
             if (expansions == null) continue;
 
-            int count = 0;
+            List<Map.Entry<String, Double>> topM;
 
-            List<Map.Entry<String, Double>> topM =
-                expansions.entrySet().stream()
-                        .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
-                        .limit(m)
-                        .collect(Collectors.toList()
-            );
-            float sum = (float)topM.stream()
+            if (!QueryTermTranslator.IDF_WEIGHTING)
+                topM =
+                    expansions.entrySet().stream()
+                            .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                            .limit(m)
+                            .collect(Collectors.toList());
+            else {
+                Map<String, Double> idfCache = new HashMap<>();
+                topM =
+                        expansions.entrySet().stream()
+                                .sorted((a, b) -> {
+                                    double idfA = idfCache.computeIfAbsent(a.getKey(), t -> {
+                                        try {
+                                            return idf(translator.reader, t);
+                                        } catch (IOException e) {
+                                            throw new RuntimeException(e);
+                                        }
+                                    });
+
+                                    double idfB = idfCache.computeIfAbsent(b.getKey(), t -> {
+                                        try {
+                                            return idf(translator.reader, t);
+                                        } catch (IOException e) {
+                                            throw new RuntimeException(e);
+                                        }
+                                    });
+
+                                    double scoreA = a.getValue() * idfA;
+                                    double scoreB = b.getValue() * idfB;
+
+                                    return Double.compare(scoreB, scoreA);
+                                })
+                                .limit(m)
+                                .collect(Collectors.toList());
+            }
+
+            float sum = (float) topM.stream()
                     .mapToDouble(Map.Entry::getValue)
                     .sum();
 
-            for (Map.Entry<String, Double> e: topM) {
-                if (e.getKey().equals(term)) continue;
+            for (Map.Entry<String, Double> e : topM) {
+                String expTerm = e.getKey();
+                if (expTerm.equals(term)) continue;
 
-                TermQuery newTq = new TermQuery(
-                        new Term(Constants.CONTENT_FIELD, e.getKey()));
+                float weight = e.getValue().floatValue() / sum;
 
-                qb.add(new BoostQuery(newTq, e.getValue().floatValue()/sum), BooleanClause.Occur.SHOULD);
+                // Accumulate instead of adding directly
+                expansionWeights.merge(expTerm, weight, Float::max);
             }
+        }
+
+        // Add each expansion term only once
+        for (Map.Entry<String, Float> e : expansionWeights.entrySet()) {
+            TermQuery newTq = new TermQuery(
+                    new Term(Constants.CONTENT_FIELD, e.getKey()));
+
+            qb.add(new BoostQuery(newTq, e.getValue()), BooleanClause.Occur.SHOULD);
         }
 
         return qb.build();
@@ -413,7 +471,6 @@ class VectorBasedDocTermProvider implements QueryTermTranslator.LuceneDocTermPro
 
             while ((term = te.next()) != null) {
                 result.add(term.utf8ToString());
-
                 if (result.size() >= maxTerms) break; // early stop
             }
 
@@ -426,3 +483,82 @@ class VectorBasedDocTermProvider implements QueryTermTranslator.LuceneDocTermPro
     }
 }
 
+class VectorIdfBasedDocTermProvider implements QueryTermTranslator.LuceneDocTermProvider {
+
+    private final IndexReader reader;
+    private final String field;
+
+    public VectorIdfBasedDocTermProvider(IndexReader reader, String field) {
+        this.reader = reader;
+        this.field = field;
+    }
+
+    private double idf(String termText) throws IOException {
+        Term term = new Term(field, termText);
+        int df = reader.docFreq(term);
+        int N = reader.numDocs();
+        return Math.log((N + 1.0) / (df + 1.0));
+    }
+
+    @Override
+    public List<String> getDocTerms(String docId, int maxTerms) {
+        try {
+            int docOffset = IndexUtils.getDocOffsetFromId(docId);
+            if (docOffset < 0) return Collections.emptyList();
+
+            Terms terms = reader.getTermVector(docOffset, field);
+            if (terms == null) return Collections.emptyList();
+
+            TermsEnum te = terms.iterator();
+            BytesRef term;
+
+            // Store TF
+            Map<String, Integer> tfMap = new HashMap<>();
+
+            while ((term = te.next()) != null) {
+                String termText = term.utf8ToString();
+                int tf = (int) te.totalTermFreq();  // key change
+                tfMap.put(termText, tf);
+            }
+
+            // Cache IDF locally (important for efficiency)
+            Map<String, Double> idfCache = new HashMap<>();
+
+            // Rank by TF-IDF
+            return tfMap.entrySet().stream()
+                    .sorted((a, b) -> {
+                        try {
+                            double idfA = idfCache.computeIfAbsent(a.getKey(), t -> {
+                                try {
+                                    return idf(t);
+                                } catch (IOException e) {
+                                    throw new RuntimeException(e);
+                                }
+                            });
+
+                            double idfB = idfCache.computeIfAbsent(b.getKey(), t -> {
+                                try {
+                                    return idf(t);
+                                } catch (IOException e) {
+                                    throw new RuntimeException(e);
+                                }
+                            });
+
+                            double scoreA = a.getValue() * idfA;
+                            double scoreB = b.getValue() * idfB;
+
+                            return Double.compare(scoreB, scoreA);
+                        } catch (RuntimeException e) {
+                            throw e;
+                        }
+                    })
+                    .map(Map.Entry::getKey)
+                    .limit(maxTerms)
+                    .collect(Collectors.toList());
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            return Collections.emptyList();
+        }
+    }
+}

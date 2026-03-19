@@ -7,17 +7,19 @@ import java.io.File;
 public class QTRetriever extends Retriever {
     QueryTermTranslator translator;
     int numExpansionTerms;
+    static final int MAX_TRANSLATIONS = 50;
 
     public QTRetriever(String indexDir,
            String testqueryFile, String trainQrelsFile,
            String trainQueryFile, int numExpansionTerms, int maxIter) throws Exception {
-        super(indexDir, testqueryFile, new File(testqueryFile).getName() + ".res", "english");
+        super(indexDir, testqueryFile, new File(testqueryFile).getName() + ".qt.res", "english");
 
         this.numExpansionTerms = numExpansionTerms;
 
         System.out.println("Training from rel docs...");
         translator = new QueryTermTranslator(reader, Constants.CONTENT_FIELD,
-                trainQrelsFile, trainQueryFile, 1);
+                trainQrelsFile, trainQueryFile, 1,
+                100, MAX_TRANSLATIONS);
         translator.train(maxIter);
     }
 
@@ -38,14 +40,14 @@ public class QTRetriever extends Retriever {
         final String qrelsTest = args.length < 5? Constants.QRELS_DL19 : args[3];
         final String queriesTest = args.length < 5? Constants.QUERIES_DL19 : args[4];
 
-        final int EM_ITERATIONS = 10;
+        final int EM_ITERATIONS = 5;
 
         Retriever retriever = new QTRetriever(indexDir,
                 queriesTest, qrelsTrainPos,
                 queriesTrain, 30, EM_ITERATIONS);
 
         AllRelRcds relRcds = new AllRelRcds(qrelsTest);
-        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(100)));
+        Evaluator evaluator = new Evaluator(relRcds, retriever.retrieve(new LMDirichletSimilarity(10)));
         System.out.println(evaluator.computeAll());
 
         retriever.reader.close();
